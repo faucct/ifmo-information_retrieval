@@ -1,0 +1,4 @@
+html5lib
+jupyterlab
+lxml
+tqdm
