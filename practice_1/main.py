@@ -59,6 +59,9 @@ if __name__ == "__main__":
     def partition_texts_base64(index):
         return os.path.join(byweb_for_course, f"texts.{index}.base64")
 
+    def partition_url_base64(index):
+        return os.path.join(byweb_for_course, f"urls.base64.{index}.csv")
+
 
     def partition_xml(index):
         return os.path.join(byweb_for_course, f"byweb.{index}.xml")
@@ -73,10 +76,15 @@ if __name__ == "__main__":
             for document in tqdm(iter_document_content(partition_xml(index)), position=index):
                 print(b64encode(document.html().text().encode("utf-8")).decode(), file=output)
 
+    def extract_urls(index):
+        with open(partition_url_base64(index), "w") as output:
+            for document in tqdm(iter_document_content(partition_xml(index)), position=index):
+                print((",".join(b64encode(url.encode("utf-8")).decode() for url in document.html().urls())), file=output)
+
 
     partitions = range(10)
     freeze_support()
     Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
-        extract_texts,
+        extract_urls,
         partitions
     )
