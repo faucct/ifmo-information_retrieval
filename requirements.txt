@@ -1,4 +1,4 @@
-html5lib
+html-text
 jupyterlab
 lxml
 tqdm
