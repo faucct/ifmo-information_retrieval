@@ -74,6 +74,14 @@ if __name__ == "__main__":
         return os.path.join(byweb_for_course, f"byweb.{index}.xml")
 
 
+    def byte_lengths_csv():
+        return os.path.join(byweb_for_course, f"byte_lengths.csv")
+
+
+    def word_lengths_csv():
+        return os.path.join(byweb_for_course, f"word_lengths.csv")
+
+
     def file_documents_number(index):
         return sum(1 for _ in tqdm(iter_document_content(partition_xml(index)), position=index))
 
@@ -90,9 +98,22 @@ if __name__ == "__main__":
                 print(",".join(b64encode(url.encode("utf-8")).decode() for url in document.html().urls()), file=output)
 
 
+    def partition_byte_lengths(index):
+        with open(partition_texts_base64(index)) as input:
+            return [len(b64decode(text_base64)) for text_base64 in tqdm(input)]
+
+
+    def partition_word_lengths(index):
+        with open(partition_texts_base64(index)) as input:
+            return [len(b64decode(text_base64).split()) for text_base64 in tqdm(input)]
+
+
     partitions = range(10)
     freeze_support()
-    Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
-        extract_texts,
+    all_word_lengths = sum(Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
+        partition_word_lengths,
         partitions
-    )
+    ), [])
+    with open(word_lengths_csv(), "w") as output:
+        for byte_length in all_word_lengths:
+            print(byte_length, file=output)
