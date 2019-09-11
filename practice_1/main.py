@@ -4,6 +4,7 @@ import html_text
 from lxml import etree, html
 import os
 import urllib.parse
+import networkx as nx
 
 
 def urljoin(base, url):
@@ -24,10 +25,12 @@ class HTML:
 
     def urls(self):
         doc_url = b64decode(self.element.find('docURL').text).decode("cp1251")
-        return [
+        res = [
             urljoin(doc_url, link_url)
             for _, _, link_url, _ in self.tree.iterlinks()
         ]
+        res.insert(0, doc_url)
+        return res
 
 
 class Document:
@@ -122,13 +125,60 @@ if __name__ == "__main__":
                 for text_base64, document in tqdm(zip(texts_base64, iter_document_content(partition_xml(index))))
             ]
 
-
     partitions = range(10)
+
+
+    def top_n_url(n):
+        dct = {}
+        for part in partitions:
+            with open(partition_url_base64(part)) as table:
+                for line in table:
+                    lst = line.split(",")
+                    dct[lst[0]] = 0
+            print(part)
+        for part in partitions:
+            with open(partition_url_base64(part)) as table:
+                for line in table:
+                    lst = line.split(",")
+                    for url in lst:
+                        if url in dct.keys():
+                            dct[url] +=1
+            print(part)
+        urls = list(dct.keys())
+        urls.sort(key=lambda x: dct[x], reverse=True)
+        print("====")
+        print(dct[urls[0]])
+        print("====")
+        return urls[:n]
+
+    def make_table(nodes):
+        g = nx.DiGraph()
+
+        def get_index(url):
+            try:
+                return nodes.index(url)
+            except ValueError:
+                return None
+
+        for part in partitions:
+            with open(partition_url_base64(part)) as table:
+                for line in table:
+                    lst = line.split(",")
+                    out_node = get_index(lst[0])
+                    if out_node is not None:
+                        for url in lst[1:]:
+                            in_node = get_index(url)
+                            if in_node is not None:
+                                g.add_edge(in_node, out_node)
+            print(part)
+        return g
+
     freeze_support()
-    all_html_text_ratios = sum(Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
-        partition_html_text_ratios,
-        partitions
-    ), [])
-    with open(html_text_ratios_csv(), "w") as output:
-        for ratio in all_html_text_ratios:
-            print(ratio, file=output)
+    nx.write_graphml(make_table(top_n_url(300)), os.path.join(byweb_for_course, "300.graphml"))
+    # all_html_text_ratios = sum(Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
+    #     partition_html_text_ratios,
+    #     partitions
+    # ), [])
+    # with open(html_text_ratios_csv(), "w") as output:
+    #     for ratio in all_html_text_ratios:
+    #         print(ratio, file=output)
