@@ -1,7 +1,9 @@
 #!/usr/bin/env python3.7
 from base64 import b64decode, b64encode
 import html_text
+import numpy as np
 from lxml import etree, html
+import matplotlib.pyplot as plt
 import os
 import urllib.parse
 import networkx as nx
@@ -110,7 +112,7 @@ if __name__ == "__main__":
 
     def partition_byte_lengths(index):
         with open(partition_texts_base64(index)) as input:
-            return [len(b64decode(text_base64)) for text_base64 in tqdm(input)]
+            return [len(b64decode(text_base64).decode().encode('cp1251', 'replace')) for text_base64 in tqdm(input)]
 
 
     def partition_word_lengths(index):
@@ -124,6 +126,7 @@ if __name__ == "__main__":
                 len(b64decode(text_base64).decode()) / len(document.content().decode('cp1251'))
                 for text_base64, document in tqdm(zip(texts_base64, iter_document_content(partition_xml(index))))
             ]
+
 
     partitions = range(10)
 
@@ -142,7 +145,7 @@ if __name__ == "__main__":
                     lst = line.split(",")
                     for url in lst:
                         if url in dct.keys():
-                            dct[url] +=1
+                            dct[url] += 1
             print(part)
         urls = list(dct.keys())
         urls.sort(key=lambda x: dct[x], reverse=True)
@@ -150,6 +153,7 @@ if __name__ == "__main__":
         print(dct[urls[0]])
         print("====")
         return urls[:n]
+
 
     def make_table(nodes):
         g = nx.DiGraph()
@@ -173,8 +177,60 @@ if __name__ == "__main__":
             print(part)
         return g
 
-    freeze_support()
+    def export_plots():
+        byte_lengths_fig = plt.gcf()
+        byte_lengths = np.genfromtxt(byte_lengths_csv())
+        plt.axvline(byte_lengths.mean(), color='red', zorder=-1)
+        plt.axvline(np.median(byte_lengths), color='green', zorder=-1)
+        plot_equal_area_bins_hist(byte_lengths, range=(0, 50000))
+        plt.title('Byte lengths')
+        plt.legend([f"Mean={byte_lengths.mean():.0f}", f"Median={np.median(byte_lengths):.0f}"])
+        plt.show()
+        plt.draw()
+        byte_lengths_fig.savefig('byte_lengths.png')
+
+        word_lengths_fig = plt.gcf()
+        word_lengths = np.genfromtxt(word_lengths_csv())
+        plt.axvline(word_lengths.mean(), color='red', zorder=-1)
+        plt.axvline(np.median(word_lengths), color='green', zorder=-1)
+        plot_equal_area_bins_hist(word_lengths, range=(0, 7000))
+        plt.title('Word lengths')
+        plt.legend([f"Mean={word_lengths.mean():.1f}", f"Median={np.median(word_lengths):.0f}"])
+        plt.show()
+        plt.draw()
+        word_lengths_fig.savefig('word_lengths.png')
+
+        html_text_ratios_fig = plt.gcf()
+        html_text_ratios = np.genfromtxt(html_text_ratios_csv())
+        plt.axvline(html_text_ratios.mean(), color='red', zorder=-1)
+        plt.axvline(np.median(html_text_ratios), color='green', zorder=-1)
+        plot_equal_area_bins_hist(html_text_ratios)
+        plt.title('Text to HTML ratios')
+        plt.legend([f"Mean={html_text_ratios.mean():.2f}", f"Median={np.median(html_text_ratios):.2f}"])
+        plt.show()
+        plt.draw()
+        html_text_ratios_fig.savefig('html_text_ratios.png')
+
+
+    def plot_equal_area_bins_hist(x, bins=50, range=None):
+        if range:
+            x = x[(x >= range[0]) & (x <= range[1])]
+        plt.yticks([])
+        return plt.hist(
+            x,
+            np.interp(np.linspace(0, len(x), bins + 1), np.arange(len(x)), np.sort(x)),
+            normed=True
+        )
+
+
+    def plot_hist_with_average(data, **args):
+        plt.hist(data, bins=50, **args)
+        plt.axvline(data.mean())
+        plt.show()
+
     nx.write_graphml(make_table(top_n_url(300)), os.path.join(byweb_for_course, "300.graphml"))
+
+    # freeze_support()
     # all_html_text_ratios = sum(Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
     #     partition_html_text_ratios,
     #     partitions

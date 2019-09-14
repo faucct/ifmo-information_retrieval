@@ -1,4 +1,7 @@
 html-text
 jupyterlab
 lxml
+matplotlib
+networkx
+numpy
 tqdm
