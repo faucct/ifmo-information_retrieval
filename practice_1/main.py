@@ -1,5 +1,7 @@
 #!/usr/bin/env python3.7
 from base64 import b64decode, b64encode
+from elasticsearch import Elasticsearch
+import elasticsearch.helpers
 import html_text
 import numpy as np
 from lxml import etree, html
@@ -49,6 +51,9 @@ class Document:
 
     def content(self):
         return b64decode(self.element.find('content').text)
+
+    def id(self):
+        return self.element.find('docID').text
 
 
 def iter_document_content(source):
@@ -177,6 +182,7 @@ if __name__ == "__main__":
             print(part)
         return g
 
+
     def export_plots():
         byte_lengths_fig = plt.gcf()
         byte_lengths = np.genfromtxt(byte_lengths_csv())
@@ -228,7 +234,39 @@ if __name__ == "__main__":
         plt.axvline(data.mean())
         plt.show()
 
-    nx.write_graphml(make_table(top_n_url(300)), os.path.join(byweb_for_course, "300.graphml"))
+
+    def export_top_30_graph():
+        nx.write_graphml(make_table(top_n_url(300)), os.path.join(byweb_for_course, "300.graphml"))
+
+
+    def index_partition(partition):
+        es = Elasticsearch()
+        with open(partition_texts_base64(partition)) as input:
+            for __, error in elasticsearch.helpers.streaming_bulk(
+                    es,
+                    ({
+                        '_op_type': 'update',
+                        '_index': 'by.web',
+                        '_type': 'document',
+                        'doc_as_upsert': True,
+                        '_id': document.id(),
+                        'doc': {
+                            'text': b64decode(text_base64).decode(),
+                        },
+                    } for document, text_base64 in tqdm(zip(iter_document_content(partition_xml(partition)), input))),
+                    yield_ok=False,
+            ):
+                print(error)
+
+
+    def index_partitions():
+        Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
+            index_partition,
+            partitions
+        )
+
+
+    index_partitions()
 
     # freeze_support()
     # all_html_text_ratios = sum(Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
