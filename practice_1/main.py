@@ -1,4 +1,7 @@
 #!/usr/bin/env python3.7
+import itertools
+import json
+import operator
 from base64 import b64decode, b64encode
 from elasticsearch import Elasticsearch
 import elasticsearch.helpers
@@ -266,7 +269,85 @@ if __name__ == "__main__":
         )
 
 
-    index_partitions()
+    def iter_batches(iterable, n):
+        try:
+            while True:
+                yield itertools.chain((next(iterable),), itertools.islice(iterable, n - 1))
+        except StopIteration:
+            pass
+
+
+    def iter_task_query():
+        for _, element in etree.iterparse('data/web2008_adhoc.xml', events=('end',), tag='{*}task'):
+            try:
+                yield element.get('id'), element.find('{*}querytext').text
+            finally:
+                del element.getparent()[0]
+
+
+    def iter_task_relevant_document_ids():
+        for _, element in etree.iterparse('data/or_relevant-minus_table.xml', events=('end',), tag='{*}task'):
+            try:
+                yield (
+                    element.get('id'),
+                    list(map(
+                        lambda document: document.get('id'),
+                        filter(
+                            lambda document: document.get('relevance') == 'vital',
+                            element.findall('{*}document'),
+                        ),
+                    )),
+                )
+            finally:
+                del element.getparent()[0]
+
+
+    def iter_relevant_with_hits():
+        es = Elasticsearch()
+        task_query = dict(iter_task_query())
+
+        for batch in iter_batches(iter_task_relevant_document_ids(), 10):
+            batch = list(batch)
+            for (_, relevant), response in zip(batch, es.msearch(
+                    f"{{}}\n{json.dumps({'size': 20, 'query': {'match': {'text': task_query[task]}}, 'stored_fields': []})}"
+                    for task, _ in batch
+            )['responses']):
+                yield relevant, response['hits']['hits']
+
+
+    def precision_evaluation_measure(relevant, hits, n=20):
+        return np.mean([1 if rank < len(hits) and hits[rank]['_id'] in relevant else 0 for rank in range(n)])
+
+
+    def recall_evaluation_measure(relevant, hits, n=20):
+        if not relevant:
+            return float('nan')
+        hit_ids = [hit['_id'] for hit in hits[:n]]
+        return np.mean([1 if document in hit_ids else 0 for document in relevant])
+
+
+    def average_precision_evaluation_measure(relevant, hits, n=20):
+        precisions = [precision_evaluation_measure(relevant, hits, n=k) for k in range(1, n + 1)]
+        recalls = [recall_evaluation_measure(relevant, hits, n=k) for k in range(0, n + 1)]
+        recall_changes = [recalls[k] - recalls[k - 1] for k in range(1, n + 1)]
+        return sum(itertools.starmap(operator.mul, zip(precisions, recall_changes)))
+
+
+    def recall_precision_evaluation_measure(relevant, hits):
+        return recall_evaluation_measure(relevant, hits, n=len(relevant))
+
+
+    def evaluation_measures():
+        all = list(iter_relevant_with_hits())
+        return (
+            list(itertools.starmap(precision_evaluation_measure, all)),
+            list(itertools.starmap(recall_evaluation_measure, all)),
+            list(itertools.starmap(average_precision_evaluation_measure, all)),
+            list(itertools.starmap(recall_precision_evaluation_measure, all)),
+        )
+
+
+    print(list(map(np.nanmean, evaluation_measures())))
 
     # freeze_support()
     # all_html_text_ratios = sum(Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
