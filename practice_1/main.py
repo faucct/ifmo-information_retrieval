@@ -278,7 +278,11 @@ if __name__ == "__main__":
 
 
     def iter_task_query():
-        for _, element in etree.iterparse('data/web2008_adhoc.xml', events=('end',), tag='{*}task'):
+        for _, element in etree.iterparse(
+                'data/byweb_for_course/web2008_adhoc.xml',
+                events=('end',),
+                tag='{*}task',
+        ):
             try:
                 yield element.get('id'), element.find('{*}querytext').text
             finally:
@@ -286,7 +290,11 @@ if __name__ == "__main__":
 
 
     def iter_task_relevant_document_ids():
-        for _, element in etree.iterparse('data/or_relevant-minus_table.xml', events=('end',), tag='{*}task'):
+        for _, element in etree.iterparse(
+                'data/byweb_for_course/or_relevant-minus_table.xml',
+                events=('end',),
+                tag='{*}task',
+        ):
             try:
                 yield (
                     element.get('id'),
