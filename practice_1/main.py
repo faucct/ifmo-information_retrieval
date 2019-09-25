@@ -137,10 +137,9 @@ if __name__ == "__main__":
 
 
     partitions = range(10)
-
+    dct = {}
 
     def top_n_url(n):
-        dct = {}
         for part in partitions:
             with open(partition_url_base64(part)) as table:
                 for line in table:
@@ -242,24 +241,53 @@ if __name__ == "__main__":
         nx.write_graphml(make_table(top_n_url(300)), os.path.join(byweb_for_course, "300.graphml"))
 
 
+    # settings = {
+    #     'mappings': {
+    #         'properties': {
+    #             'pagerank': {
+    #                 'type': 'rank_feature'
+    #             }
+    #         }
+    #     }
+    # }
+    settings = {
+        'mappings': {
+            "name": {
+                'properties': {
+                    'text': {
+                        'type': 'text'
+                    },
+                    "pagerank": {
+                        "type": "long"
+                    }
+                }
+            }
+        }
+    }
+
+    # es = Elasticsearch([{'host': 'localhost', 'port': 9200, 'timeout': 360, 'maxsize': 25}])
+    es = Elasticsearch()
+
     def index_partition(partition):
-        es = Elasticsearch()
         with open(partition_texts_base64(partition)) as input:
-            for __, error in elasticsearch.helpers.streaming_bulk(
-                    es,
-                    ({
-                        '_op_type': 'update',
-                        '_index': 'by.web',
-                        '_type': 'document',
-                        'doc_as_upsert': True,
-                        '_id': document.id(),
-                        'doc': {
-                            'text': b64decode(text_base64).decode(),
-                        },
-                    } for document, text_base64 in tqdm(zip(iter_document_content(partition_xml(partition)), input))),
-                    yield_ok=False,
-            ):
-                print(error)
+            with open(partition_url_base64(partition)) as urls:
+                for __, error in elasticsearch.helpers.streaming_bulk(
+                        es,
+                        ({
+                            '_op_type': 'update',
+                            '_index': 'by.web',
+                            '_type': 'document',
+                            'doc_as_upsert': True,
+                            '_id': document.id(),
+                            'doc': {
+                                'text': b64decode(text_base64).decode(),
+                                "pagerank": dct[url.split(',')[0]]
+                            },
+                        } for document, text_base64, url in
+                                tqdm(zip(iter_document_content(partition_xml(partition)), input, urls))),
+                        yield_ok=False,
+                ):
+                    print(error)
 
 
     def index_partitions():
@@ -311,13 +339,14 @@ if __name__ == "__main__":
 
 
     def iter_relevant_with_hits():
-        es = Elasticsearch()
+        # es = Elasticsearch()
         task_query = dict(iter_task_query())
 
         for batch in iter_batches(iter_task_relevant_document_ids(), 10):
             batch = list(batch)
+
             for (_, relevant), response in zip(batch, es.msearch(
-                    f"{{}}\n{json.dumps({'size': 20, 'query': {'match': {'text': task_query[task]}}, 'stored_fields': []})}"
+                    f"{{}}\n{json.dumps({'size': 20, 'query': {'bool': {'should': [{'match': {'text': task_query[task]}}, {'rank_feature': {'field': 'pagerank', 'saturation': {'pivot': 10}}}]}}, 'stored_fields': []})}"
                     for task, _ in batch
             )['responses']):
                 yield relevant, response['hits']['hits']
@@ -354,9 +383,14 @@ if __name__ == "__main__":
             list(itertools.starmap(recall_precision_evaluation_measure, all)),
         )
 
-
+    # print(dct)
+    es.indices.delete(index="myindex")
+    es.indices.create(index="myindex", body=settings)
+    top_n_url(0)
+    index_partitions()
     print(list(map(np.nanmean, evaluation_measures())))
-
+    print(list(map(np.nanmedian, evaluation_measures())))
+    # print(es.indices.get_mapping(index="myindex"))
     # freeze_support()
     # all_html_text_ratios = sum(Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
     #     partition_html_text_ratios,
