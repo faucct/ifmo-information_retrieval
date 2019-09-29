@@ -16,5 +16,5 @@
 |----------------------|---------|---------|
 | Precision@20         | 0.30    | 0.2     |
 | Recall@20            | 0.22    | 0.17    |
-| Average precision@20 | 0.15    | 0.10    |
+| Average precision@20 | 0.63    | 0.68    |
 | Recall-precision@20  | 0.19    | 0.16    |

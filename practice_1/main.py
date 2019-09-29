@@ -320,21 +320,22 @@ if __name__ == "__main__":
                     f"{{}}\n{json.dumps({'size': 20, 'query': {'match': {'text': task_query[task]}}, 'stored_fields': []})}"
                     for task, _ in batch
             )['responses']):
-                yield relevant, response['hits']['hits']
+                yield relevant, [doc['_id'] for doc in response['hits']['hits']]
 
 
     def precision_evaluation_measure(relevant, hits, n=20):
-        return np.mean([1 if rank < len(hits) and hits[rank]['_id'] in relevant else 0 for rank in range(n)])
+        return np.mean([1 if rank < len(hits) and hits[rank] in relevant else 0 for rank in range(n)])
 
 
     def recall_evaluation_measure(relevant, hits, n=20):
         if not relevant:
             return float('nan')
-        hit_ids = [hit['_id'] for hit in hits[:n]]
+        hit_ids = [hit for hit in hits[:n]]
         return np.mean([1 if document in hit_ids else 0 for document in relevant])
 
 
     def average_precision_evaluation_measure(relevant, hits, n=20):
+        relevant = [doc for doc in relevant if doc in hits[:n]]
         precisions = [precision_evaluation_measure(relevant, hits, n=k) for k in range(1, n + 1)]
         recalls = [recall_evaluation_measure(relevant, hits, n=k) for k in range(0, n + 1)]
         recall_changes = [recalls[k] - recalls[k - 1] for k in range(1, n + 1)]
@@ -355,7 +356,7 @@ if __name__ == "__main__":
         )
 
 
-    print(list(map(np.nanmean, evaluation_measures())))
+    print(list(map(np.nanmedian, evaluation_measures())))
 
     # freeze_support()
     # all_html_text_ratios = sum(Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
