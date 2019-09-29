@@ -252,21 +252,18 @@ if __name__ == "__main__":
     # }
     settings = {
         'mappings': {
-            "name": {
-                'properties': {
-                    'text': {
-                        'type': 'text'
-                    },
-                    "pagerank": {
-                        "type": "long"
-                    }
+            'properties': {
+                'text': {
+                    'type': 'text'
+                },
+                "pagerank": {
+                    "type": "rank_feature"
                 }
             }
         }
     }
 
     # es = Elasticsearch([{'host': 'localhost', 'port': 9200, 'timeout': 360, 'maxsize': 25}])
-    es = Elasticsearch()
 
     def index_partition(partition):
         with open(partition_texts_base64(partition)) as input:
@@ -274,9 +271,9 @@ if __name__ == "__main__":
                 for __, error in elasticsearch.helpers.streaming_bulk(
                         es,
                         ({
+                            '_index': "myindex",
                             '_op_type': 'update',
-                            '_index': 'by.web',
-                            '_type': 'document',
+                            # '_type': 'document',
                             'doc_as_upsert': True,
                             '_id': document.id(),
                             'doc': {
@@ -346,24 +343,26 @@ if __name__ == "__main__":
             batch = list(batch)
 
             for (_, relevant), response in zip(batch, es.msearch(
-                    f"{{}}\n{json.dumps({'size': 20, 'query': {'bool': {'should': [{'match': {'text': task_query[task]}}, {'rank_feature': {'field': 'pagerank', 'saturation': {'pivot': 10}}}]}}, 'stored_fields': []})}"
-                    for task, _ in batch
+                    [f"{{}}\n{json.dumps({'size': 20, 'query': {'bool': {'should': [{'match': {'text': task_query[task]}}, {'rank_feature': {'field': 'pagerank', 'log': {'scaling_factor': 1}}}]}}, 'stored_fields': []})}"
+                    for task, _ in batch], index="myindex"
             )['responses']):
-                yield relevant, response['hits']['hits']
+                # 2print(response)
+                yield relevant, [doc['_id'] for doc in response['hits']['hits']]
 
 
     def precision_evaluation_measure(relevant, hits, n=20):
-        return np.mean([1 if rank < len(hits) and hits[rank]['_id'] in relevant else 0 for rank in range(n)])
+        return np.mean([1 if rank < len(hits) and hits[rank] in relevant else 0 for rank in range(n)])
 
 
     def recall_evaluation_measure(relevant, hits, n=20):
         if not relevant:
             return float('nan')
-        hit_ids = [hit['_id'] for hit in hits[:n]]
+        hit_ids = [hit for hit in hits[:n]]
         return np.mean([1 if document in hit_ids else 0 for document in relevant])
 
 
     def average_precision_evaluation_measure(relevant, hits, n=20):
+        relevant = [doc for doc in relevant if doc in hits[:n]]
         precisions = [precision_evaluation_measure(relevant, hits, n=k) for k in range(1, n + 1)]
         recalls = [recall_evaluation_measure(relevant, hits, n=k) for k in range(0, n + 1)]
         recall_changes = [recalls[k] - recalls[k - 1] for k in range(1, n + 1)]
@@ -383,13 +382,28 @@ if __name__ == "__main__":
             list(itertools.starmap(recall_precision_evaluation_measure, all)),
         )
 
-    # print(dct)
-    es.indices.delete(index="myindex")
+
+    es = Elasticsearch()
+    # es.indices.delete(index="myindex")
     es.indices.create(index="myindex", body=settings)
     top_n_url(0)
+    rank_summ = sum(dct.values())
+    for key in dct:
+        dct[key] /= rank_summ
+    #     dct[key] *= 100
     index_partitions()
+
     print(list(map(np.nanmean, evaluation_measures())))
     print(list(map(np.nanmedian, evaluation_measures())))
+
+    query = {
+        'query': {
+            'match_all': {}
+        }
+    }
+
+    print(es.count(index='myindex', body=query))
+
     # print(es.indices.get_mapping(index="myindex"))
     # freeze_support()
     # all_html_text_ratios = sum(Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
