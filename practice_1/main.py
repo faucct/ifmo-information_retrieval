@@ -346,7 +346,6 @@ if __name__ == "__main__":
                     [f"{{}}\n{json.dumps({'size': 20, 'query': {'bool': {'should': [{'match': {'text': task_query[task]}}, {'rank_feature': {'field': 'pagerank', 'log': {'scaling_factor': 1}}}]}}, 'stored_fields': []})}"
                     for task, _ in batch], index="myindex"
             )['responses']):
-                # 2print(response)
                 yield relevant, [doc['_id'] for doc in response['hits']['hits']]
 
 
