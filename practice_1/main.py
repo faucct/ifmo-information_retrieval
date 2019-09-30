@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import os
 import urllib.parse
 import networkx as nx
+from pymystem3 import Mystem
 
 
 def urljoin(base, url):
@@ -73,6 +74,18 @@ def iter_document_content(source):
 
 
 if __name__ == "__main__":
+
+
+    # import sys
+    # sys.stderr = open("stderr", "w")
+
+    filename = "settings_for_elastic.json"
+    with open(filename, "r") as f:
+        SETTINGS_FOR_ELASTIC = json.load(f)
+
+    SETTINGS_FOR_ELASTIC = ''
+
+
     byweb_for_course = os.path.join(os.path.dirname(__file__), 'data/byweb_for_course')
     from multiprocessing import Pool, freeze_support, RLock
     from tqdm import tqdm
@@ -186,6 +199,13 @@ if __name__ == "__main__":
         return g
 
 
+    def processing_mystem(line):
+        mystem = Mystem()
+        decoding_str = line.lower()
+        str_after_stem = list(filter(lambda x: x.isalpha(),mystem.lemmatize(decoding_str)))
+        return " ".join(str_after_stem)
+
+
     def export_plots():
         byte_lengths_fig = plt.gcf()
         byte_lengths = np.genfromtxt(byte_lengths_csv())
@@ -243,18 +263,19 @@ if __name__ == "__main__":
 
 
     def index_partition(partition):
-        es = Elasticsearch()
+        es = Elasticsearch(timeout=10)
         with open(partition_texts_base64(partition)) as input:
             for __, error in elasticsearch.helpers.streaming_bulk(
                     es,
                     ({
                         '_op_type': 'update',
                         '_index': 'by.web',
-                        '_type': 'document',
                         'doc_as_upsert': True,
                         '_id': document.id(),
                         'doc': {
-                            'text': b64decode(text_base64).decode(),
+                            # 'text': b64decode(b64encode(document.html().text().encode("utf-8")).decode()).decode(),
+                            'text': processing_mystem(b64decode(b64encode(document.html().text().encode("utf-8")).decode()).decode()),
+
                         },
                     } for document, text_base64 in tqdm(zip(iter_document_content(partition_xml(partition)), input))),
                     yield_ok=False,
@@ -263,10 +284,22 @@ if __name__ == "__main__":
 
 
     def index_partitions():
+
+        es = Elasticsearch()
+
+        try:
+            es.indices.delete(index='by.web')
+        except:
+            pass
+
+        es.indices.create(index='by.web', body=SETTINGS_FOR_ELASTIC)
+
         Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
             index_partition,
             partitions
         )
+        # for i in partitions:
+        #     index_partition(i)
 
 
     def iter_batches(iterable, n):
@@ -317,7 +350,8 @@ if __name__ == "__main__":
         for batch in iter_batches(iter_task_relevant_document_ids(), 10):
             batch = list(batch)
             for (_, relevant), response in zip(batch, es.msearch(
-                    f"{{}}\n{json.dumps({'size': 20, 'query': {'match': {'text': task_query[task]}}, 'stored_fields': []})}"
+                    # f"{{}}\n{json.dumps({'size': 20, 'query': {'match': {'text': task_query[task]}}, 'stored_fields': []})}"
+                    f"{{}}\n{json.dumps({'size': 20, 'query': {'match': {'text': processing_mystem(task_query[task])}}, 'stored_fields': []})}"
                     for task, _ in batch
             )['responses']):
                 yield relevant, [doc['_id'] for doc in response['hits']['hits']]
@@ -355,8 +389,26 @@ if __name__ == "__main__":
             list(itertools.starmap(recall_precision_evaluation_measure, all)),
         )
 
+    def pretty_print():
+        print(*list(map(lambda x: "{:.2f}".format(x), map(np.nanmean, evaluation_measures()))))
+        print(*list(map(lambda x: "{:.2f}".format(x), map(np.nanmedian, evaluation_measures()))))
 
-    print(list(map(np.nanmedian, evaluation_measures())))
+    def search(text, index='by,web', n=20):
+        es = Elasticsearch()
+        hits = es.search(index='by.web', body=query(text))
+        print("request:", text)
+        print("response:", list(map(lambda row: int(row['_id']), hits['hits']['hits'])))
+
+
+    def query(x):
+        # return {'query': {'bool': {'should': [{'match': {'text': x}}]}}}
+        return {'query': {'bool': {'should': [{'match': {'text': processing_mystem(x)}}]}}}
+
+    def request_samples():
+        search("солнце дом2")
+        search("поздравления с днем рождения")
+        search("новосибирский медицинский универ")
+        search("контактор КМ3-20")
 
     # freeze_support()
     # all_html_text_ratios = sum(Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(

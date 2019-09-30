@@ -1,0 +1,26 @@
+{
+    "mappings": {
+        "properties": {
+            "text": {
+                "type": "text",
+                "analyzer": "ru"
+            }
+        }
+    },
+    "settings": {
+        "analysis": {
+            "analyzer": {
+                "ru": {
+                    "tokenizer": "standard",
+                    "filter": ["lowercase", "russian_snow"]
+                }
+            },
+            "filter": {
+                "russian_snow": {
+                    "type": "snowball",
+                    "language": "Russian"
+                }
+            }
+        }
+    }
+}
