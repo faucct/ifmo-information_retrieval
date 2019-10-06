@@ -1,3 +1,4 @@
+catboost
 elasticsearch > 7.0.0
 html-text
 jupyterlab

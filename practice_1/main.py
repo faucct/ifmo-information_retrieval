@@ -1,4 +1,8 @@
 #!/usr/bin/env python3.7
+import csv
+import catboost
+from catboost import CatBoost, MetricVisualizer, CatBoostClassifier
+from sklearn.model_selection import train_test_split
 import itertools
 import json
 import operator
@@ -139,6 +143,18 @@ if __name__ == "__main__":
     partitions = range(10)
     dct = {}
 
+
+    def calculate_html_text_ratios():
+        freeze_support()
+        all_html_text_ratios = sum(Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
+            partition_html_text_ratios,
+            partitions
+        ), [])
+        with open(html_text_ratios_csv(), "w") as output:
+            for ratio in all_html_text_ratios:
+                print(ratio, file=output)
+
+
     def top_n_url(n):
         for part in partitions:
             with open(partition_url_base64(part)) as table:
@@ -220,14 +236,16 @@ if __name__ == "__main__":
         html_text_ratios_fig.savefig('html_text_ratios.png')
 
 
-    def plot_equal_area_bins_hist(x, bins=50, range=None):
+    def plot_equal_area_bins_hist(x, bins=50, range=None, **kwargs):
         if range:
             x = x[(x >= range[0]) & (x <= range[1])]
         plt.yticks([])
         return plt.hist(
             x,
             np.interp(np.linspace(0, len(x), bins + 1), np.arange(len(x)), np.sort(x)),
-            normed=True
+            normed=True,
+            range=range,
+            **kwargs,
         )
 
 
@@ -262,6 +280,7 @@ if __name__ == "__main__":
             }
         }
     }
+
 
     # es = Elasticsearch([{'host': 'localhost', 'port': 9200, 'timeout': 360, 'maxsize': 25}])
 
@@ -343,8 +362,9 @@ if __name__ == "__main__":
             batch = list(batch)
 
             for (_, relevant), response in zip(batch, es.msearch(
-                    [f"{{}}\n{json.dumps({'size': 20, 'query': {'bool': {'should': [{'match': {'text': task_query[task]}}, {'rank_feature': {'field': 'pagerank', 'log': {'scaling_factor': 1}}}]}}, 'stored_fields': []})}"
-                    for task, _ in batch], index="myindex"
+                    [
+                        f"{{}}\n{json.dumps({'size': 20, 'query': {'bool': {'should': [{'match': {'text': task_query[task]}}, {'rank_feature': {'field': 'pagerank', 'log': {'scaling_factor': 1}}}]}}, 'stored_fields': []})}"
+                        for task, _ in batch], index="myindex"
             )['responses']):
                 yield relevant, [doc['_id'] for doc in response['hits']['hits']]
 
@@ -383,32 +403,108 @@ if __name__ == "__main__":
 
 
     es = Elasticsearch()
-    # es.indices.delete(index="myindex")
-    es.indices.create(index="myindex", body=settings)
-    top_n_url(0)
-    rank_summ = sum(dct.values())
-    for key in dct:
-        dct[key] /= rank_summ
-    #     dct[key] *= 100
-    index_partitions()
 
-    print(list(map(np.nanmean, evaluation_measures())))
-    print(list(map(np.nanmedian, evaluation_measures())))
 
-    query = {
-        'query': {
-            'match_all': {}
+    def task2():
+        # es.indices.delete(index="myindex")
+        es.indices.create(index="myindex", body=settings)
+        top_n_url(0)
+        rank_summ = sum(dct.values())
+        for key in dct:
+            dct[key] /= rank_summ
+        #     dct[key] *= 100
+        index_partitions()
+
+        print(list(map(np.nanmean, evaluation_measures())))
+        print(list(map(np.nanmedian, evaluation_measures())))
+
+        query = {
+            'query': {
+                'match_all': {}
+            }
         }
-    }
 
-    print(es.count(index='myindex', body=query))
+        print(es.count(index='myindex', body=query))
 
-    # print(es.indices.get_mapping(index="myindex"))
-    # freeze_support()
-    # all_html_text_ratios = sum(Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
-    #     partition_html_text_ratios,
-    #     partitions
-    # ), [])
-    # with open(html_text_ratios_csv(), "w") as output:
-    #     for ratio in all_html_text_ratios:
-    #         print(ratio, file=output)
+
+    def iter_imat(path):
+        with open(path) as input:
+            for line in input:
+                line, query = line.split(' # ')
+                label, *features = line.split(' ')
+                features = {int(id): float(value) for id, value in map(lambda feature: feature.split(':'), features)}
+                yield int(query), features, label
+
+
+    def imat_to_catboost(imat, output_path):
+        with open(output_path, 'w') as output:
+            writer = csv.writer(output, delimiter='\t')
+            for query, features, label in imat:
+                writer.writerow([label, query] + [features.get(feature, 0) for feature in range(245)])
+
+
+    def split_imat_learning_to_catboost():
+        query_rows = [
+            tuple(rows)
+            for query, rows in itertools.groupby(iter_imat('data/imat2009_learning.txt'), key=lambda row: row[0])
+        ]
+        train_and_validate, holdout = train_test_split(query_rows, test_size=0.5)
+        train, validate = train_test_split(train_and_validate, test_size=0.1)
+        imat_to_catboost(sum(train, ()), 'data/imat2009_train.tsv')
+        imat_to_catboost(sum(validate, ()), 'data/imat2009_validate.tsv')
+        imat_to_catboost(sum(holdout, ()), 'data/imat2009_holdout.tsv')
+
+
+    def imat_test_to_catboost():
+        imat_to_catboost(iter_imat('data/imat2009_test.txt'), 'data/imat2009_test.tsv')
+
+
+    def fit_model(model):
+        model.fit(
+            catboost.Pool(data='data/imat2009_train.tsv', column_description='columns.tsv'),
+            eval_set=catboost.Pool(data='data/imat2009_validate.tsv', column_description='columns.tsv'),
+        )
+
+
+    def eval_model(model):
+        return model.eval_metrics(
+            catboost.Pool(data='data/imat2009_holdout.tsv', column_description='columns.tsv'),
+            ['NDCG:top=20']
+        )['NDCG:top=20;type=Base']
+
+
+    def plot_all_ndcg():
+        fig = plt.gcf()
+        model = CatBoostClassifier()
+        model.load_model('data/PairLogit.cbm')
+        plot_equal_area_bins_hist(np.array(eval_model(model)), range=(0.75, 1), alpha=0.5)
+        model = CatBoostClassifier()
+        model.load_model('data/YetiRank.cbm')
+        plot_equal_area_bins_hist(np.array(eval_model(model)), range=(0.75, 1), alpha=0.5)
+        model = CatBoostClassifier()
+        model.load_model('data/MAE.cbm')
+        plot_equal_area_bins_hist(np.array(eval_model(model)), range=(0.75, 1), alpha=0.5)
+        plt.legend(['PairLogit', 'YetiRank', 'MAE'])
+        plt.show()
+        plt.draw()
+        fig.savefig('imat2009_ndcg@20.png')
+
+
+    # split_imat_learning_to_catboost()
+
+    # model = CatBoost({'loss_function': 'PairLogit', 'custom_metric': ['NDCG:top=20']})
+    # fit_model(model)
+    # model.save_model('data/PairLogit.cbm')
+    #
+    # model = CatBoost({'loss_function': 'YetiRank', 'custom_metric': ['NDCG:top=20']})
+    # fit_model(model)
+    # model.save_model('data/YetiRank.cbm')
+    #
+    # model = CatBoost({'loss_function': 'MAE', 'custom_metric': ['NDCG:top=20']})
+    # fit_model(model)
+    # model.save_model('data/MAE.cbm')
+
+    plot_all_ndcg()
+
+    # imat_test_to_catboost()
+    # model.predict(catboost.Pool(data='data/imat2009_test.tsv', column_description='columns.tsv'))
