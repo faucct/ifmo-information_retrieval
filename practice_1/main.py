@@ -1,7 +1,7 @@
 #!/usr/bin/env python3.7
 import csv
 import catboost
-# from catboost import CatBoost, MetricVisualizer, CatBoostClassifier
+from catboost import CatBoost, MetricVisualizer, CatBoostClassifier
 from sklearn.model_selection import train_test_split
 import itertools
 import json
@@ -542,16 +542,12 @@ if __name__ == "__main__":
 
     def plot_all_ndcg():
         fig = plt.gcf()
-        model = CatBoostClassifier()
-        model.load_model('data/PairLogit.cbm')
-        plot_equal_area_bins_hist(np.array(eval_model(model)), range=(0.75, 1), alpha=0.5)
-        model = CatBoostClassifier()
-        model.load_model('data/YetiRank.cbm')
-        plot_equal_area_bins_hist(np.array(eval_model(model)), range=(0.75, 1), alpha=0.5)
-        model = CatBoostClassifier()
-        model.load_model('data/MAE.cbm')
-        plot_equal_area_bins_hist(np.array(eval_model(model)), range=(0.75, 1), alpha=0.5)
-        plt.legend(['PairLogit', 'YetiRank', 'MAE'])
+        model_names = ['PairLogit', 'PairLogitPairwise', 'YetiRank', 'YetiRankPairwise', 'MAE', 'Poisson', 'RMSE']
+        for name in model_names:
+            model = CatBoostClassifier()
+            model.load_model(f'data/{name}.cbm')
+            plot_equal_area_bins_hist(np.array(eval_model(model)), range=(0.75, 1), alpha=0.5)
+        plt.legend(model_names)
         plt.show()
         plt.draw()
         fig.savefig('imat2009_ndcg@20.png')
@@ -559,21 +555,29 @@ if __name__ == "__main__":
 
 
     # split_imat_learning_to_catboost()
-    make_dataset("data/task2.tsv")
+    # make_dataset("data/task2.tsv")
 
-    # model = CatBoost({'loss_function': 'PairLogit', 'custom_metric': ['NDCG:top=20']})
+    # model = CatBoost({'loss_function': 'PairLogitPairwise', 'custom_metric': ['NDCG:top=20']})
     # fit_model(model)
-    # model.save_model('data/PairLogit.cbm')
+    # model.save_model('data/PairLogitPairwise.cbm')
     #
-    # model = CatBoost({'loss_function': 'YetiRank', 'custom_metric': ['NDCG:top=20']})
+    # model = CatBoost({'loss_function': 'YetiRankPairwise', 'custom_metric': ['NDCG:top=20']})
     # fit_model(model)
-    # model.save_model('data/YetiRank.cbm')
-    #
+    # model.save_model('data/YetiRankPairwise.cbm')
+
     # model = CatBoost({'loss_function': 'MAE', 'custom_metric': ['NDCG:top=20']})
     # fit_model(model)
     # model.save_model('data/MAE.cbm')
 
-    # plot_all_ndcg()
+    # model = CatBoost({'loss_function': 'Poisson', 'custom_metric': ['NDCG:top=20']})
+    # fit_model(model)
+    # model.save_model('data/Poisson.cbm')
+
+    # model = CatBoost({'loss_function': 'RMSE', 'custom_metric': ['NDCG:top=20']})
+    # fit_model(model)
+    # model.save_model('data/RMSE.cbm')
+
+    plot_all_ndcg()
     # task2()
 
     # imat_test_to_catboost()
