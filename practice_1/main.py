@@ -1,7 +1,7 @@
 #!/usr/bin/env python3.7
 import csv
 import catboost
-from catboost import CatBoost, MetricVisualizer, CatBoostClassifier
+# from catboost import CatBoost, MetricVisualizer, CatBoostClassifier
 from sklearn.model_selection import train_test_split
 import itertools
 import json
@@ -335,7 +335,7 @@ if __name__ == "__main__":
 
     def iter_task_relevant_document_ids():
         for _, element in etree.iterparse(
-                'data/byweb_for_course/or_relevant-minus_table.xml',
+                'data/byweb_for_course/relevant_table_2009.xml',
                 events=('end',),
                 tag='{*}task',
         ):
@@ -349,6 +349,27 @@ if __name__ == "__main__":
                             element.findall('{*}document'),
                         ),
                     )),
+                )
+            finally:
+                del element.getparent()[0]
+
+    def iter_task_document_id_relevance():
+        for _, element in etree.iterparse(
+                'data/byweb_for_course/relevant_table_2009.xml',
+                events=('end',),
+                tag='{*}task',
+        ):
+            try:
+                yield (
+                    element.get('id'),
+                    dict(zip(list(map(
+                        lambda document: document.get('id'),
+                        element.findall('{*}document'),
+                    )),
+                    list(map(
+                        lambda document: document.get('relevance') == 'vital',
+                            element.findall('{*}document'),
+                    )))),
                 )
             finally:
                 del element.getparent()[0]
@@ -367,6 +388,18 @@ if __name__ == "__main__":
                         for task, _ in batch], index="myindex"
             )['responses']):
                 yield relevant, [doc['_id'] for doc in response['hits']['hits']]
+
+    def iter_task_document_relevance():
+        task_query = dict(iter_task_query())
+        for batch in iter_batches(iter_task_document_id_relevance(), 10):
+            batch = list(batch)
+            for (tsk, relevant), response in zip(batch, es.msearch(
+                    [
+                        f"{{}}\n{json.dumps({'size': len(rel_dct), 'query': {'bool': {'filter': {'bool': {'should': [{'term': {'_id': id}} for id in rel_dct.keys()]}}, 'should': [{'match': {'text': task_query[task]}}, {'rank_feature': {'field': 'pagerank', 'log': {'scaling_factor': 1}}}]}}})}"
+                        for task, rel_dct in batch], index="myindex"
+            )['responses']):
+                for doc in response['hits']['hits']:
+                    yield relevant[doc['_id']], task_query[tsk], doc['_score'], doc['_source']['text'], doc['_source']['pagerank']
 
 
     def precision_evaluation_measure(relevant, hits, n=20):
@@ -407,22 +440,40 @@ if __name__ == "__main__":
 
     def task2():
         # es.indices.delete(index="myindex")
-        es.indices.create(index="myindex", body=settings)
-        top_n_url(0)
-        rank_summ = sum(dct.values())
-        for key in dct:
-            dct[key] /= rank_summ
-        #     dct[key] *= 100
-        index_partitions()
-
-        print(list(map(np.nanmean, evaluation_measures())))
-        print(list(map(np.nanmedian, evaluation_measures())))
+        # es.indices.create(index="myindex", body=settings)
+        # top_n_url(0)
+        # rank_summ = sum(dct.values())
+        # for key in dct:
+        #     dct[key] /= rank_summ
+        # #     dct[key] *= 100
+        # index_partitions()
+        #
+        # for r, t, s, d in iter_task_document_relevance():
+        #     print(t)
+        # print(list(map(np.nanmean, evaluation_measures())))
+        # print(list(map(np.nanmedian, evaluation_measures())))
 
         query = {
             'query': {
-                'match_all': {}
+                'bool': {
+                    'filter': {
+                        'bool': {
+                            'should': [
+                                {'term': {'_id': "4"}},
+                                {'term': {'_id': "11"}}
+                            ]
+                        }
+                    },
+                    'should': {
+                        'match': {
+                            'text': "hi"
+                        }
+                    }
+                }
             }
         }
+
+        print(es.search(index='myindex', body=query))
 
         print(es.count(index='myindex', body=query))
 
@@ -459,6 +510,22 @@ if __name__ == "__main__":
         imat_to_catboost(iter_imat('data/imat2009_test.txt'), 'data/imat2009_test.tsv')
 
 
+    def make_dataset(path):
+        with open(path, 'w') as out:
+            writer = csv.writer(out, delimiter='\t')
+            writer.writerow(['lable', 'quary_length', 'text_length', 'quary_in_text', 'quary_in_text_rate', 'pagerank', 'score'])
+            for r, t, s, d, p in iter_task_document_relevance():
+                quary_len = len(t)
+                text_len = len(d)
+                in_text_full = t in d
+                in_text_any = 0
+                for word in t.split():
+                    if word in d:
+                        in_text_any += 1
+                in_text_any /= len(t.split())
+                writer.writerow([int(r), quary_len, text_len, int(in_text_full), in_text_any, p, s])
+
+
     def fit_model(model):
         model.fit(
             catboost.Pool(data='data/imat2009_train.tsv', column_description='columns.tsv'),
@@ -490,7 +557,9 @@ if __name__ == "__main__":
         fig.savefig('imat2009_ndcg@20.png')
 
 
+
     # split_imat_learning_to_catboost()
+    make_dataset("data/task2.tsv")
 
     # model = CatBoost({'loss_function': 'PairLogit', 'custom_metric': ['NDCG:top=20']})
     # fit_model(model)
@@ -504,7 +573,8 @@ if __name__ == "__main__":
     # fit_model(model)
     # model.save_model('data/MAE.cbm')
 
-    plot_all_ndcg()
+    # plot_all_ndcg()
+    # task2()
 
     # imat_test_to_catboost()
     # model.predict(catboost.Pool(data='data/imat2009_test.tsv', column_description='columns.tsv'))
