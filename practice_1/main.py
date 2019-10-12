@@ -1,7 +1,7 @@
 #!/usr/bin/env python3.7
 import csv
 import catboost
-from catboost import CatBoost, MetricVisualizer, CatBoostClassifier
+# from catboost import CatBoost, MetricVisualizer, CatBoostClassifier
 from sklearn.model_selection import train_test_split
 import itertools
 import json
@@ -371,7 +371,7 @@ if __name__ == "__main__":
             finally:
                 del element.getparent()[0]
 
-    def iter_task_document_id_relevance():
+    def iter_task_ids():
         for _, element in etree.iterparse(
                 'data/byweb_for_course/or_relevant-minus_table.xml',
                 events=('end',),
@@ -382,17 +382,35 @@ if __name__ == "__main__":
                         lambda document: get_url_id(document.get('id')),
                         element.findall('{*}document'),
                     )))
-                yield (
-                    element.get('id'),
-                    dict(zip(list(map(
-                        lambda document: get_url_id(document.get('id')),
+                yield element.get('id')
+            finally:
+                del element.getparent()[0]
+
+
+    def iter_task_document_id_relevance():
+        ids = list(iter_task_ids())
+        for _, element in etree.iterparse(
+                'data/byweb_for_course/relevant_table_2009.xml',
+                events=('end',),
+                tag='{*}task',
+        ):
+            try:
+                print(list(map(
+                        lambda document: document.get('id'),
                         element.findall('{*}document'),
-                    )),
-                    list(map(
-                        lambda document: document.get('relevance') == 'vital',
+                    )))
+                if element.get('id') not in ids:
+                    yield (
+                        element.get('id'),
+                        dict(zip(list(map(
+                            lambda document: document.get('id'),
                             element.findall('{*}document'),
-                    )))),
-                )
+                        )),
+                            list(map(
+                                lambda document: document.get('relevance') == 'vital',
+                                element.findall('{*}document'),
+                            )))),
+                    )
             finally:
                 del element.getparent()[0]
 
@@ -421,7 +439,23 @@ if __name__ == "__main__":
                         for task, rel_dct in batch], index="myindex"
             )['responses']):
                 for doc in response['hits']['hits']:
-                    yield relevant[doc['_id']], tsk, task_query[tsk].lower(), doc['_score'], doc['_source']['text'].lower(), doc['_source']['pagerank']
+                    yield relevant[doc['_id']] if doc['_id'] in relevant.keys() else False, \
+                          tsk, task_query[tsk].lower(), \
+                          doc['_score'], doc['_source']['text'].lower(), doc['_source']['pagerank']
+
+    def iter_task_document_relevance_test():
+        task_query = dict(iter_task_query())
+        for batch in iter_batches(iter_task_document_id_relevance(), 10):
+            batch = list(batch)
+            for (tsk, relevant), response in zip(batch, es.msearch(
+                    [
+                        f"{{}}\n{json.dumps({'size': len(rel_dct), 'query': {'bool': {'should': [{'match': {'text': task_query[task]}}, {'rank_feature': {'field': 'pagerank', 'log': {'scaling_factor': 1}}}]}}})}"
+                        for task, rel_dct in batch], index="myindex"
+            )['responses']):
+                for doc in response['hits']['hits']:
+                    yield relevant[doc['_id']] if doc['_id'] in relevant.keys() else False, \
+                          tsk, task_query[tsk].lower(), \
+                          doc['_score'], doc['_source']['text'].lower(), doc['_source']['pagerank']
 
 
     def precision_evaluation_measure(relevant, hits, n=20):
@@ -630,9 +664,9 @@ if __name__ == "__main__":
 
     # split_imat_learning_to_catboost()
     # task2()
-    make_url_id()
+    # make_url_id()
     # print(url_id)
-    make_dataset("data/task3_2008.tsv")
+    make_dataset("data/task3_2009.tsv")
 
     # model = CatBoost({'loss_function': 'PairLogitPairwise', 'custom_metric': ['NDCG:top=20']})
     # fit_model(model)
