@@ -274,6 +274,9 @@ if __name__ == "__main__":
                 'text': {
                     'type': 'text'
                 },
+                'url': {
+                    'type' : 'text'
+                },
                 "pagerank": {
                     "type": "rank_feature"
                 }
@@ -297,6 +300,7 @@ if __name__ == "__main__":
                             '_id': document.id(),
                             'doc': {
                                 'text': b64decode(text_base64).decode(),
+                                'url': b64decode(url.split(',')[0]).decode(),
                                 "pagerank": dct[url.split(',')[0]]
                             },
                         } for document, text_base64, url in
@@ -304,6 +308,20 @@ if __name__ == "__main__":
                         yield_ok=False,
                 ):
                     print(error)
+
+
+    url_id = {}
+    def make_url_id():
+        for part in partitions:
+            with open(partition_url_base64(part)) as urls:
+                for doc, url in zip(iter_document_content(partition_xml(part)), urls):
+                    url_id[b64decode(url.split(',')[0]).decode()] = doc.id()
+            print(part)
+
+    def get_url_id(url):
+        if url in url_id.keys():
+            return url_id[url]
+        return 0
 
 
     def index_partitions():
@@ -335,7 +353,7 @@ if __name__ == "__main__":
 
     def iter_task_relevant_document_ids():
         for _, element in etree.iterparse(
-                'data/byweb_for_course/relevant_table_2009.xml',
+                'data/byweb_for_course/or_relevant-minus_table.xml',
                 events=('end',),
                 tag='{*}task',
         ):
@@ -355,15 +373,19 @@ if __name__ == "__main__":
 
     def iter_task_document_id_relevance():
         for _, element in etree.iterparse(
-                'data/byweb_for_course/relevant_table_2009.xml',
+                'data/byweb_for_course/or_relevant-minus_table.xml',
                 events=('end',),
                 tag='{*}task',
         ):
             try:
+                print(list(map(
+                        lambda document: get_url_id(document.get('id')),
+                        element.findall('{*}document'),
+                    )))
                 yield (
                     element.get('id'),
                     dict(zip(list(map(
-                        lambda document: document.get('id'),
+                        lambda document: get_url_id(document.get('id')),
                         element.findall('{*}document'),
                     )),
                     list(map(
@@ -399,7 +421,7 @@ if __name__ == "__main__":
                         for task, rel_dct in batch], index="myindex"
             )['responses']):
                 for doc in response['hits']['hits']:
-                    yield relevant[doc['_id']], task_query[tsk], doc['_score'], doc['_source']['text'], doc['_source']['pagerank']
+                    yield relevant[doc['_id']], tsk, task_query[tsk].lower(), doc['_score'], doc['_source']['text'].lower(), doc['_source']['pagerank']
 
 
     def precision_evaluation_measure(relevant, hits, n=20):
@@ -459,8 +481,8 @@ if __name__ == "__main__":
                     'filter': {
                         'bool': {
                             'should': [
-                                {'term': {'_id': "4"}},
-                                {'term': {'_id': "11"}}
+                                {'match': {'url': "http://www.livesound.by/articles/23-12.06-useless-id.html"}},
+                                {'match': {'url': "http://data.mf.grsu.by/citforum/htdocs/internet/articles/xqlzxml.shtml"}}
                             ]
                         }
                     },
@@ -472,6 +494,17 @@ if __name__ == "__main__":
                 }
             }
         }
+        # query = {
+        #     'query': {
+        #         'bool': {
+        #             'should': {
+        #                 'match': {
+        #                     'url': "http://www.livesound.by/articles/23-12.06-useless-id.html"
+        #                 }
+        #             }
+        #         }
+        #     }
+        # }
 
         print(es.search(index='myindex', body=query))
 
@@ -509,21 +542,62 @@ if __name__ == "__main__":
     def imat_test_to_catboost():
         imat_to_catboost(iter_imat('data/imat2009_test.txt'), 'data/imat2009_test.tsv')
 
+    def all_in(dct):
+        for i in dct.values():
+            if i <= 0:
+                return False
+        return True
+
+    def inc_count_if_found(dct, val):
+        for key in dct.keys():
+            if key.lower() == val.lower():
+                dct[key] += 1
+                return
+
+    def dec_count_if_found(dct, val):
+        for key in dct.keys():
+            if key.lower() == val.lower():
+                dct[key] -= 1
+                return
+
+
+    def min_window(query, text):
+        q_count = {}
+        for token in query:
+            q_count[token] = 0
+        n = len(text)
+        res = n + 1
+        i = j = 0
+        while j < n:
+            inc_count_if_found(q_count, text[j])
+            j += 1
+            while all_in(q_count):
+                if res > j - i:
+                    res = j - i
+                dec_count_if_found(q_count, text[i])
+                i += 1
+        return res / len(q_count.values()) - 1
+
 
     def make_dataset(path):
         with open(path, 'w') as out:
             writer = csv.writer(out, delimiter='\t')
-            writer.writerow(['lable', 'quary_length', 'text_length', 'quary_in_text', 'quary_in_text_rate', 'pagerank', 'score'])
-            for r, t, s, d, p in iter_task_document_relevance():
+            writer.writerow(['lable', 'query_id', 'query_length', 'text_length', 'query_tokens', 'text_tokens',
+                             'query_in_text', 'query_in_text_rate', 'min_window', 'pagerank', 'BM25'])
+            for r, id, t, s, d, p in iter_task_document_relevance():
                 quary_len = len(t)
                 text_len = len(d)
+                query_tokens = len(t.split())
+                text_tokens = len(d.split())
                 in_text_full = t in d
                 in_text_any = 0
                 for word in t.split():
                     if word in d:
                         in_text_any += 1
                 in_text_any /= len(t.split())
-                writer.writerow([int(r), quary_len, text_len, int(in_text_full), in_text_any, p, s])
+                window = min_window(t.split(), d.split())
+                writer.writerow([int(r), id, quary_len, text_len, query_tokens, text_tokens,
+                                 int(in_text_full), in_text_any, window, p, s])
 
 
     def fit_model(model):
@@ -559,7 +633,10 @@ if __name__ == "__main__":
 
 
     # split_imat_learning_to_catboost()
-    make_dataset("data/task2.tsv")
+    # task2()
+    make_url_id()
+    # print(url_id)
+    make_dataset("data/task3_2008.tsv")
 
     # model = CatBoost({'loss_function': 'PairLogit', 'custom_metric': ['NDCG:top=20']})
     # fit_model(model)
