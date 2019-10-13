@@ -1,7 +1,7 @@
 #!/usr/bin/env python3.7
 import csv
 import catboost
-from catboost import CatBoost, MetricVisualizer, CatBoostClassifier
+from catboost import CatBoostClassifier, CatBoost
 from sklearn.model_selection import train_test_split
 import itertools
 import json
@@ -68,7 +68,6 @@ def iter_document_content(source):
 
     :rtype: Iterator[:class:`xml.etree.Element`]
     """
-
     for _, element in etree.iterparse(source, events=('end',), tag='document'):
         try:
             yield Document(element)
@@ -236,7 +235,17 @@ if __name__ == "__main__":
         html_text_ratios_fig.savefig('html_text_ratios.png')
 
 
-    def plot_equal_area_bins_hist(x, bins=50, range=None, **kwargs):
+    metrics = ["MAE",
+               "RMSE",
+               "Poisson",
+               "PairLogit",
+               "PairLogitPairwise",
+               "YetiRank",
+               "YetiRankPairwise"]
+
+
+    def plot_equal_area_bins_hist(x, name='name', bins=50, range=None, **kwargs):
+        print(f"{name}\t | {np.nanmean(x):.3f} | {np.nanmedian(x):.3f} | ")
         if range:
             x = x[(x >= range[0]) & (x <= range[1])]
         plt.yticks([])
@@ -281,36 +290,63 @@ if __name__ == "__main__":
         }
     }
 
-
     # es = Elasticsearch([{'host': 'localhost', 'port': 9200, 'timeout': 360, 'maxsize': 25}])
+
+    count_err = 0
+
 
     def index_partition(partition):
         with open(partition_texts_base64(partition)) as input:
             with open(partition_url_base64(partition)) as urls:
-                for __, error in elasticsearch.helpers.streaming_bulk(
-                        es,
-                        ({
+                def decode_without_except(text_base64):
+                    global count_err
+                    s = ''
+                    try:
+                        s = b64decode(text_base64).decode()
+                    except:
+                        print(count_err)
+                        count_err += 1
+                    return s
+
+                def without_except(url):
+                    try:
+                        return dct[url.split(',')[0]]
+                    except:
+                        return ""
+
+                some_list = []
+                for document, text_base64, url in zip(iter_document_content(partition_xml(partition)), input, urls):
+                    try:
+                        x = {
                             '_index': "myindex",
                             '_op_type': 'update',
                             # '_type': 'document',
                             'doc_as_upsert': True,
                             '_id': document.id(),
                             'doc': {
-                                'text': b64decode(text_base64).decode(),
-                                "pagerank": dct[url.split(',')[0]]
+                                'text': document.content(),
+                                "pagerank": without_except(url)
                             },
-                        } for document, text_base64, url in
-                                tqdm(zip(iter_document_content(partition_xml(partition)), input, urls))),
+                        }
+                    except:
+                        continue
+                    some_list.append(x)
+
+                for __, error in elasticsearch.helpers.streaming_bulk(
+                        es,
+                        some_list,
                         yield_ok=False,
                 ):
                     print(error)
 
 
     def index_partitions():
-        Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
-            index_partition,
-            partitions
-        )
+        # Pool(len(partitions), initializer=tqdm.set_lock, initargs=(RLock(),)).map(
+        #     index_partition,
+        #     partitions
+        # )
+        for index in range(len(partitions)):
+            index_partition(index)
 
 
     def iter_batches(iterable, n):
@@ -490,21 +526,88 @@ if __name__ == "__main__":
         fig.savefig('imat2009_ndcg@20.png')
 
 
-    # split_imat_learning_to_catboost()
+    def train():
+        split_imat_learning_to_catboost()
 
-    # model = CatBoost({'loss_function': 'PairLogit', 'custom_metric': ['NDCG:top=20']})
-    # fit_model(model)
-    # model.save_model('data/PairLogit.cbm')
-    #
-    # model = CatBoost({'loss_function': 'YetiRank', 'custom_metric': ['NDCG:top=20']})
-    # fit_model(model)
-    # model.save_model('data/YetiRank.cbm')
-    #
-    # model = CatBoost({'loss_function': 'MAE', 'custom_metric': ['NDCG:top=20']})
-    # fit_model(model)
-    # model.save_model('data/MAE.cbm')
+        model = CatBoost({'loss_function': 'PairLogit', 'custom_metric': ['NDCG:top=20']})
+        fit_model(model)
+        model.save_model('data/PairLogit.cbm')
 
-    plot_all_ndcg()
+        model = CatBoost({'loss_function': 'YetiRank', 'custom_metric': ['NDCG:top=20']})
+        fit_model(model)
+        model.save_model('data/YetiRank.cbm')
+
+        model = CatBoost({'loss_function': 'MAE', 'custom_metric': ['NDCG:top=20']})
+        fit_model(model)
+        model.save_model('data/MAE.cbm')
+
+        return model
+
+
+    # model = train()
+
+    # plot_all_ndcg()
 
     # imat_test_to_catboost()
     # model.predict(catboost.Pool(data='data/imat2009_test.tsv', column_description='columns.tsv'))
+
+    # index_partitions()
+    import pandas as pd
+
+
+    def split_imat_learning_to_catboost2():
+        data = pd.read_table("data/task3_2008.tsv")  # practice_1/
+        train, validate = train_test_split(data, test_size=0.1)
+        train.sort_index().to_csv("data/task3_2008_train.tsv", sep='\t', index=None, header=None)
+        validate.sort_index().to_csv("data/task3_2008_validate.tsv", sep='\t', index=None, header=None)
+
+
+    def fit_model2(model: CatBoost):
+        model.fit(
+            catboost.Pool(data='data/task3_2008_train.tsv', column_description='columns.tsv'),
+            eval_set=catboost.Pool(data='data/task3_2008_validate.tsv', column_description='columns.tsv'),
+        )
+
+
+    def train2():
+
+        split_imat_learning_to_catboost2()
+
+        for name in metrics:
+            model = CatBoost({'iterations': 10, 'loss_function': name, 'custom_metric': ['NDCG:top=20']})
+            fit_model2(model)
+            model.save_model(f'data/{name}.cbm')
+
+
+    def eval_model2(model):
+        return model.eval_metrics(
+            catboost.Pool(data='data/task3_2009.tsv', column_description='columns.tsv'),
+            ['NDCG:top=20']
+        )['NDCG:top=20;type=Base']
+
+
+    def plot_all_ndcg2():
+        fig = plt.gcf()
+        _range = (0, 1)
+        for name in metrics:
+            model = CatBoostClassifier()
+            model.load_model(f'data/{name}.cbm')
+            plot_equal_area_bins_hist(np.array(eval_model2(model)), name=name, range=_range, alpha=0.5)
+        plt.legend([metrics])
+        plt.show()
+        plt.draw()
+        fig.savefig('task3_2019_ndc2g@20.png')
+
+
+    def get_feature_importance():
+        for name in metrics:
+            model = CatBoostClassifier()
+            model.load_model(f'data/{name}.cbm')
+            pool = catboost.Pool(data='data/task3_2009.tsv', column_description='columns.tsv')
+            print(name, model.get_feature_importance(pool))
+
+    # train2()
+
+    # plot_all_ndcg2()
+
+    # get_feature_importance()
